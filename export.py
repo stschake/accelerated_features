@@ -67,6 +67,11 @@ def parse_args():
         help="Export only the matching.",
     )
     parser.add_argument(
+        "--xfeat_only_lighterglue",
+        action="store_true",
+        help="Export only the XFeat Lighterglue addon matching model.",
+    )
+    parser.add_argument(
         "--split_instance_norm",
         action="store_true",
         help="Whether to split InstanceNorm2d into '(x - mean) / (std + epsilon)', due to some inference libraries not supporting InstanceNorm, such as OpenVINO.",
@@ -208,6 +213,38 @@ if __name__ == "__main__":
             do_constant_folding=True,
             input_names=["mkpts0", "feats0", "sc0", "mkpts1", "feats1", "sc1"],
             output_names=["matches", "batch_indexes"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    elif args.xfeat_only_lighterglue:
+        if args.opset < 14:
+            print(f"Lighterglue requires at least opset 14, bumping from {args.opset}")
+            args.opset = 14
+        mkpts0 = torch.randn(1, args.top_k, 2, dtype=torch.float32, device='cpu')
+        mkpts1 = torch.randn(1, args.top_k, 2, dtype=torch.float32, device='cpu')
+        feats0 = torch.randn(1, args.top_k, 64, dtype=torch.float32, device='cpu')
+        feats1 = torch.randn(1, args.top_k, 64, dtype=torch.float32, device='cpu')
+        # Lighterglue requires normalized keypoints; the model will do this for you
+        # but requires passing in the image size
+        image0_size = torch.randn(2, dtype=torch.float32, device='cpu')
+        image1_size = torch.randn(2, dtype=torch.float32, device='cpu')
+        dynamic_axes = {
+            "mkpts0": {1: "num_keypoints_0"},
+            "feats0": {1: "num_keypoints_0"},
+            "mkpts1": {1: "num_keypoints_1"},
+            "feats1": {1: "num_keypoints_1"},
+        }
+        from modules.lighterglueonnx import LighterGlueONNX
+        lighterglue = LighterGlueONNX()
+        lighterglue = lighterglue.eval().cpu()
+        torch.onnx.export(
+            lighterglue,
+            (mkpts0, feats0, image0_size, mkpts1, feats1, image1_size),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["mkpts0", "feats0", "image0_size", "mkpts1", "feats1", "image1_size"],
+            output_names=["matches", "scores"],
             dynamic_axes=dynamic_axes if args.dynamic else None,
         )
     else:
